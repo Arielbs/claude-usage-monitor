@@ -91,6 +91,7 @@ function showError(msg) {
 async function showProfileModal() {
   const profiles = await invoke('get_chrome_profiles');
   const selectedProfile = await invoke('get_selected_profile') || 'Default';
+  const account = await invoke('get_account');
 
   const profileList = document.getElementById('profile-list');
   profileList.innerHTML = '';
@@ -98,8 +99,16 @@ async function showProfileModal() {
   profiles.forEach(profile => {
     const div = document.createElement('div');
     div.className = 'profile-item' + (profile.id === selectedProfile ? ' selected' : '');
+
+    // Check if this profile matches the logged-in account
+    const isLoggedInProfile = account?.email && profile.email &&
+      profile.email.toLowerCase() === account.email.toLowerCase();
+
     div.innerHTML = `
-      <div class="profile-name">${profile.name}</div>
+      <div class="profile-header">
+        <div class="profile-name">${profile.name}</div>
+        ${isLoggedInProfile && account.subscription ? `<span class="subscription-badge">${account.subscription}</span>` : ''}
+      </div>
       ${profile.email ? `<div class="profile-email">${profile.email}</div>` : ''}
     `;
     div.addEventListener('click', async () => {
@@ -130,10 +139,8 @@ async function hideProfileModal() {
 }
 
 async function checkFirstRun() {
-  const selectedProfile = await invoke('get_selected_profile');
-  if (!selectedProfile) {
-    showProfileModal();
-  }
+  // Profile is now auto-detected from account email
+  // No need to show profile selector on first run
 }
 
 window.addEventListener('DOMContentLoaded', async () => {
@@ -183,6 +190,10 @@ window.addEventListener('DOMContentLoaded', async () => {
   });
 
   await listen('usage-error', (e) => showError(e.payload));
+
+  await listen('account-updated', (e) => {
+    // Account info received - profile auto-selected
+  });
 
   try {
     const usage = await invoke('get_usage');

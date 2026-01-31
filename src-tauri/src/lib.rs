@@ -42,11 +42,36 @@ struct ClaudeCredentials {
 struct OAuthToken {
     #[serde(rename = "accessToken")]
     access_token: String,
+    #[serde(rename = "subscriptionType")]
+    subscription_type: Option<String>,
+    #[serde(rename = "rateLimitTier")]
+    rate_limit_tier: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct AccountInfo {
+    pub email: Option<String>,
+    pub display_name: Option<String>,
+    pub full_name: Option<String>,
+    pub subscription: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProfileResponse {
+    account: ProfileAccount,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProfileAccount {
+    email: String,
+    display_name: Option<String>,
+    full_name: Option<String>,
 }
 
 pub struct AppState {
     pub usage: Arc<Mutex<Option<UsageResponse>>>,
     pub last_error: Arc<Mutex<Option<String>>>,
+    pub account: Arc<Mutex<Option<AccountInfo>>>,
 }
 
 impl Default for AppState {
@@ -54,11 +79,35 @@ impl Default for AppState {
         Self {
             usage: Arc::new(Mutex::new(None)),
             last_error: Arc::new(Mutex::new(None)),
+            account: Arc::new(Mutex::new(None)),
         }
     }
 }
 
-fn get_claude_token() -> Result<String, String> {
+struct CredentialsInfo {
+    access_token: String,
+    subscription: Option<String>,
+}
+
+fn format_subscription(subscription_type: Option<&str>, rate_limit_tier: Option<&str>) -> Option<String> {
+    match subscription_type {
+        Some("max") => {
+            let multiplier = rate_limit_tier
+                .and_then(|tier| {
+                    if tier.contains("20x") { Some("20x") }
+                    else if tier.contains("5x") { Some("5x") }
+                    else { None }
+                })
+                .unwrap_or("");
+            Some(format!("Max {}", multiplier).trim().to_string())
+        }
+        Some("pro") => Some("Pro".to_string()),
+        Some("free") | None => Some("Free".to_string()),
+        Some(other) => Some(other.to_string()),
+    }
+}
+
+fn get_claude_credentials() -> Result<CredentialsInfo, String> {
     use std::process::Command;
     let output = Command::new("security")
         .args(["find-generic-password", "-s", "Claude Code-credentials", "-w"])
@@ -80,8 +129,18 @@ fn get_claude_token() -> Result<String, String> {
 
     creds
         .claude_ai_oauth
-        .map(|oauth| oauth.access_token)
+        .map(|oauth| CredentialsInfo {
+            access_token: oauth.access_token,
+            subscription: format_subscription(
+                oauth.subscription_type.as_deref(),
+                oauth.rate_limit_tier.as_deref(),
+            ),
+        })
         .ok_or_else(|| "No OAuth token found in credentials".to_string())
+}
+
+fn get_claude_token() -> Result<String, String> {
+    get_claude_credentials().map(|c| c.access_token)
 }
 
 async fn fetch_usage(token: &str) -> Result<UsageResponse, String> {
@@ -102,6 +161,49 @@ async fn fetch_usage(token: &str) -> Result<UsageResponse, String> {
         .json::<UsageResponse>()
         .await
         .map_err(|e| format!("Failed to parse response: {}", e))
+}
+
+async fn fetch_profile(token: &str) -> Result<AccountInfo, String> {
+    let client = reqwest::Client::new();
+    let response = client
+        .get("https://api.anthropic.com/api/oauth/profile")
+        .header("Authorization", format!("Bearer {}", token))
+        .header("anthropic-beta", "oauth-2025-04-20")
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("API returned status: {}", response.status()));
+    }
+
+    let profile: ProfileResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse profile: {}", e))?;
+
+    Ok(AccountInfo {
+        email: Some(profile.account.email),
+        display_name: profile.account.display_name,
+        full_name: profile.account.full_name,
+        subscription: None, // Set by caller from credentials
+    })
+}
+
+fn auto_select_chrome_profile(email: &str) -> Option<String> {
+    let profiles = get_chrome_profiles();
+    for profile in profiles {
+        if let Some(ref profile_email) = profile.email {
+            if profile_email.eq_ignore_ascii_case(email) {
+                // Save the matched profile
+                let home = std::env::var("HOME").unwrap_or_default();
+                let config_path = format!("{}/.claude-usage-monitor-profile", home);
+                let _ = std::fs::write(&config_path, &profile.id);
+                return Some(profile.id);
+            }
+        }
+    }
+    None
 }
 
 fn update_tray_title(app: &AppHandle, usage: &UsageResponse) {
@@ -192,6 +294,12 @@ async fn get_usage(state: tauri::State<'_, AppState>) -> Result<Option<UsageResp
 }
 
 #[tauri::command]
+async fn get_account(state: tauri::State<'_, AppState>) -> Result<Option<AccountInfo>, String> {
+    let account = state.account.lock().await;
+    Ok(account.clone())
+}
+
+#[tauri::command]
 async fn set_window_height(app: AppHandle, height: u32) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("main") {
         window.set_size(tauri::LogicalSize::new(180.0, height as f64))
@@ -271,6 +379,7 @@ pub fn run() {
     let app_state = AppState::default();
     let usage_state = app_state.usage.clone();
     let error_state = app_state.last_error.clone();
+    let account_state = app_state.account.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -317,18 +426,32 @@ pub fn run() {
             let app_handle = app.handle().clone();
             let usage_clone = usage_state.clone();
             let error_clone = error_state.clone();
+            let account_clone = account_state.clone();
 
             tauri::async_runtime::spawn(async move {
-                match get_claude_token() {
-                    Ok(token) => match fetch_usage(&token).await {
-                        Ok(usage) => {
-                            update_tray_title(&app_handle, &usage);
-                            *usage_clone.lock().await = Some(usage.clone());
-                            let _ = app_handle.emit("usage-updated", usage);
+                match get_claude_credentials() {
+                    Ok(creds) => {
+                        // Fetch profile and auto-select Chrome profile
+                        if let Ok(mut account) = fetch_profile(&creds.access_token).await {
+                            account.subscription = creds.subscription;
+                            if let Some(ref email) = account.email {
+                                auto_select_chrome_profile(email);
+                            }
+                            *account_clone.lock().await = Some(account.clone());
+                            let _ = app_handle.emit("account-updated", account);
                         }
-                        Err(e) => {
-                            *error_clone.lock().await = Some(e.clone());
-                            let _ = app_handle.emit("usage-error", e);
+
+                        // Fetch usage
+                        match fetch_usage(&creds.access_token).await {
+                            Ok(usage) => {
+                                update_tray_title(&app_handle, &usage);
+                                *usage_clone.lock().await = Some(usage.clone());
+                                let _ = app_handle.emit("usage-updated", usage);
+                            }
+                            Err(e) => {
+                                *error_clone.lock().await = Some(e.clone());
+                                let _ = app_handle.emit("usage-error", e);
+                            }
                         }
                     },
                     Err(e) => {
@@ -343,7 +466,7 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_usage, get_last_error, refresh_usage, open_url, get_chrome_profiles, get_selected_profile, set_selected_profile, set_window_height])
+        .invoke_handler(tauri::generate_handler![get_usage, get_last_error, refresh_usage, open_url, get_chrome_profiles, get_selected_profile, set_selected_profile, set_window_height, get_account])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

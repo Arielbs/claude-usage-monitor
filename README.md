@@ -7,6 +7,12 @@
 A macOS menu bar app that displays your Claude AI usage limits at a glance.
 
 <p align="center">
+  <a href="https://github.com/Arielbs/claude-usage-monitor/releases/latest/download/Claude.Usage.Monitor_0.1.0_aarch64.dmg">
+    <img src="https://img.shields.io/badge/Download-DMG-blue?style=for-the-badge&logo=apple" alt="Download DMG">
+  </a>
+</p>
+
+<p align="center">
   <img src="assets/screenshot.png" alt="Screenshot" width="200">
 </p>
 

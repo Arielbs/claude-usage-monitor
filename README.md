@@ -24,8 +24,8 @@ A macOS menu bar app that displays your Claude AI usage limits at a glance.
 ### Homebrew (recommended)
 
 ```bash
-brew tap Arielbs/tap
-brew install claude-usage-monitor
+brew tap Arielbs/claude-usage-monitor https://github.com/Arielbs/claude-usage-monitor
+brew install --cask claude-usage-monitor
 ```
 
 ### Manual

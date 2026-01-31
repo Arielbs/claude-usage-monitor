@@ -19,3 +19,6 @@ npm-debug.log*
 
 # Local dev files
 *.local
+
+# Source assets (icons generated from these)
+assets/

@@ -20,5 +20,5 @@ npm-debug.log*
 # Local dev files
 *.local
 
-# Source assets (icons generated from these)
-assets/
+# Source assets for icon generation (keep locally)
+assets/claude_usage_monitor*.png

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="app-icon.png" alt="Claude Usage Monitor" width="128" height="128">
+  <img src="assets/app-icon.png" alt="Claude Usage Monitor" width="128" height="128">
 </p>
 
 # Claude Usage Monitor
@@ -7,7 +7,7 @@
 A macOS menu bar app that displays your Claude AI usage limits at a glance.
 
 <p align="center">
-  <img src="screenshot.png" alt="Screenshot" width="200">
+  <img src="assets/screenshot.png" alt="Screenshot" width="200">
 </p>
 
 ## Features

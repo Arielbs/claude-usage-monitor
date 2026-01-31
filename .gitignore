@@ -5,9 +5,10 @@ node_modules/
 dist/
 src-tauri/target/
 
-# IDE
+# IDE & tools
 .vscode/
 .idea/
+.claude/
 
 # OS
 .DS_Store

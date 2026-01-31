@@ -1,9 +1,12 @@
 #!/bin/bash
 # Generate all Tauri app icons from the source image
 
-cd /Users/ariel/dev/playground/claude-usage-monitor/src-tauri/icons/
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+ICONS_DIR="$ROOT_DIR/src-tauri/icons"
+SRC="$ROOT_DIR/assets/claude_usage_monitor_transparent.png"
 
-SRC="/Users/ariel/dev/playground/claude-usage-monitor/assets/claude_usage_monitor_transparent.png"
+cd "$ICONS_DIR"
 
 echo "Generating PNG icons..."
 sips -z 32 32 "$SRC" --out 32x32.png

@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Claude Usage</title>
+    <script type="module" src="/main.js" defer></script>
+  </head>
+
+  <body>
+    <!-- Main usage view -->
+    <main id="main-view" class="container">
+      <div class="header">
+        <span class="title">Claude quota</span>
+        <div class="buttons">
+          <button id="btn-profile" title="Select Chrome Profile">👤</button>
+          <button id="btn-home" title="Claude Home">⌂</button>
+          <button id="btn-settings" title="Settings">⚙</button>
+        </div>
+      </div>
+
+      <div id="error-container" class="hidden">
+        <span id="error-text"></span>
+      </div>
+
+      <div id="loading">Loading...</div>
+
+      <div id="usage-container" class="hidden">
+        <div class="section">
+          <div class="bar-row">
+            <div class="bar usage-bar">
+              <div id="five-hour-bar" class="bar-fill"></div>
+            </div>
+            <span id="five-hour-percent" class="value">--%</span>
+          </div>
+          <div class="bar-row">
+            <div class="bar timer-bar">
+              <div id="five-hour-timer-bar" class="bar-fill timer"></div>
+            </div>
+            <span id="five-hour-timer" class="value">--</span>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="bar-row">
+            <div class="bar usage-bar">
+              <div id="seven-day-bar" class="bar-fill"></div>
+            </div>
+            <span id="seven-day-percent" class="value">--%</span>
+          </div>
+          <div class="bar-row">
+            <div class="bar timer-bar">
+              <div id="seven-day-timer-bar" class="bar-fill timer"></div>
+            </div>
+            <span id="seven-day-timer" class="value">--</span>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Profile Selector (separate view) -->
+    <div id="profile-modal" class="container hidden">
+      <div class="modal-title">Select Chrome Profile</div>
+      <div id="profile-list"></div>
+    </div>
+  </body>
+</html>

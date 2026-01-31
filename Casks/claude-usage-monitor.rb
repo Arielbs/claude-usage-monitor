@@ -1,6 +1,6 @@
 cask "claude-usage-monitor" do
   version "0.1.0"
-  sha256 "c682982427398dc03d0c93736c6fbb88106906b806733b35ce7ab332e1cb616a"
+  sha256 "e95f8ccd4657fb8cf4167e10d943e36a894295122623f043f8ee92bd64151d35"
 
   url "https://github.com/Arielbs/claude-usage-monitor/releases/download/v#{version}/Claude.Usage.Monitor_#{version}_aarch64.dmg"
   name "Claude Usage Monitor"

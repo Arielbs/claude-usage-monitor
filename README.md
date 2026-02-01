@@ -40,6 +40,16 @@ Download the `.dmg` from [Releases](https://github.com/Arielbs/claude-usage-moni
 
 > Requires [Claude Code](https://claude.ai/code) to be installed and logged in.
 
+### Troubleshooting
+
+If you see **"App is damaged and can't be opened"**, run this in Terminal:
+
+```bash
+xattr -cr "/Applications/Claude Usage Monitor.app"
+```
+
+This removes the quarantine flag that macOS adds to apps downloaded from the internet.
+
 ## Building
 
 ```bash

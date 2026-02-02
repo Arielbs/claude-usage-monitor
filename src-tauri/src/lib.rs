@@ -32,20 +32,157 @@ pub struct UsageResponse {
     pub extra_usage: Option<ExtraUsage>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct ClaudeCredentials {
     #[serde(rename = "claudeAiOauth")]
     claude_ai_oauth: Option<OAuthToken>,
 }
 
-#[derive(Debug, Deserialize)]
+// Synchronous version for reading raw credentials JSON
+fn get_raw_credentials_json() -> Result<String, String> {
+    use std::process::Command;
+    let output = Command::new("security")
+        .args(["find-generic-password", "-s", "Claude Code-credentials", "-w"])
+        .output()
+        .map_err(|e| format!("Failed to run security command: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Keychain access failed: {}", stderr));
+    }
+
+    String::from_utf8(output.stdout)
+        .map_err(|e| format!("Invalid UTF-8 in credentials: {}", e))
+        .map(|s| s.trim().to_string())
+}
+
+fn update_keychain_credentials(new_token: &OAuthToken) -> Result<(), String> {
+    use std::process::Command;
+
+    // Read existing credentials to preserve other fields
+    let json_str = get_raw_credentials_json()?;
+    let mut creds: ClaudeCredentialsFull = serde_json::from_str(&json_str)
+        .map_err(|e| format!("Failed to parse credentials: {}", e))?;
+
+    // Update the OAuth token
+    creds.claude_ai_oauth = Some(new_token.clone());
+
+    let new_json = serde_json::to_string(&creds)
+        .map_err(|e| format!("Failed to serialize credentials: {}", e))?;
+
+    // Delete existing keychain entry
+    let _ = Command::new("security")
+        .args(["delete-generic-password", "-s", "Claude Code-credentials"])
+        .output();
+
+    // Add updated credentials
+    let output = Command::new("security")
+        .args([
+            "add-generic-password",
+            "-s", "Claude Code-credentials",
+            "-a", "",
+            "-w", &new_json,
+            "-U",
+        ])
+        .output()
+        .map_err(|e| format!("Failed to update keychain: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Keychain update failed: {}", stderr));
+    }
+
+    Ok(())
+}
+
+async fn refresh_oauth_token(refresh_token: &str) -> Result<OAuthToken, String> {
+    let client = reqwest::Client::new();
+
+    let params = [
+        ("grant_type", "refresh_token"),
+        ("refresh_token", refresh_token),
+    ];
+
+    let response = client
+        .post("https://console.anthropic.com/v1/oauth/token")
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .form(&params)
+        .send()
+        .await
+        .map_err(|e| format!("Token refresh request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("Token refresh failed ({}): {}", status, body));
+    }
+
+    let token_response: TokenRefreshResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse token response: {}", e))?;
+
+    // Read current credentials to preserve subscription info
+    let json_str = get_raw_credentials_json()?;
+    let current_creds: ClaudeCredentials = serde_json::from_str(&json_str)
+        .map_err(|e| format!("Failed to parse credentials: {}", e))?;
+
+    let current_oauth = current_creds.claude_ai_oauth.unwrap_or(OAuthToken {
+        access_token: String::new(),
+        refresh_token: None,
+        expires_at: None,
+        scopes: None,
+        subscription_type: None,
+        rate_limit_tier: None,
+    });
+
+    let new_expires_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64 + (token_response.expires_in * 1000))
+        .ok();
+
+    let new_token = OAuthToken {
+        access_token: token_response.access_token,
+        refresh_token: Some(token_response.refresh_token),
+        expires_at: new_expires_at,
+        scopes: current_oauth.scopes,
+        subscription_type: current_oauth.subscription_type,
+        rate_limit_tier: current_oauth.rate_limit_tier,
+    };
+
+    // Update keychain with new credentials
+    update_keychain_credentials(&new_token)?;
+
+    Ok(new_token)
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
 struct OAuthToken {
     #[serde(rename = "accessToken")]
     access_token: String,
+    #[serde(rename = "refreshToken")]
+    refresh_token: Option<String>,
+    #[serde(rename = "expiresAt")]
+    expires_at: Option<i64>,
+    #[serde(rename = "scopes")]
+    scopes: Option<Vec<String>>,
     #[serde(rename = "subscriptionType")]
     subscription_type: Option<String>,
     #[serde(rename = "rateLimitTier")]
     rate_limit_tier: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct ClaudeCredentialsFull {
+    #[serde(rename = "claudeAiOauth")]
+    claude_ai_oauth: Option<OAuthToken>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TokenRefreshResponse {
+    access_token: String,
+    refresh_token: String,
+    expires_in: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -86,6 +223,7 @@ impl Default for AppState {
 
 struct CredentialsInfo {
     access_token: String,
+    refresh_token: Option<String>,
     subscription: Option<String>,
 }
 
@@ -108,21 +246,7 @@ fn format_subscription(subscription_type: Option<&str>, rate_limit_tier: Option<
 }
 
 fn get_claude_credentials() -> Result<CredentialsInfo, String> {
-    use std::process::Command;
-    let output = Command::new("security")
-        .args(["find-generic-password", "-s", "Claude Code-credentials", "-w"])
-        .output()
-        .map_err(|e| format!("Failed to run security command: {}", e))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Keychain access failed: {}", stderr));
-    }
-
-    let json_str = String::from_utf8(output.stdout)
-        .map_err(|e| format!("Invalid UTF-8 in credentials: {}", e))?
-        .trim()
-        .to_string();
+    let json_str = get_raw_credentials_json()?;
 
     let creds: ClaudeCredentials =
         serde_json::from_str(&json_str).map_err(|e| format!("Failed to parse credentials: {}", e))?;
@@ -131,6 +255,7 @@ fn get_claude_credentials() -> Result<CredentialsInfo, String> {
         .claude_ai_oauth
         .map(|oauth| CredentialsInfo {
             access_token: oauth.access_token,
+            refresh_token: oauth.refresh_token,
             subscription: format_subscription(
                 oauth.subscription_type.as_deref(),
                 oauth.rate_limit_tier.as_deref(),
@@ -143,7 +268,12 @@ fn get_claude_token() -> Result<String, String> {
     get_claude_credentials().map(|c| c.access_token)
 }
 
-async fn fetch_usage(token: &str) -> Result<UsageResponse, String> {
+fn get_refresh_token() -> Result<String, String> {
+    get_claude_credentials()
+        .and_then(|c| c.refresh_token.ok_or_else(|| "No refresh token found".to_string()))
+}
+
+async fn fetch_usage_internal(token: &str) -> Result<UsageResponse, (String, bool)> {
     let client = reqwest::Client::new();
     let response = client
         .get("https://api.anthropic.com/api/oauth/usage")
@@ -151,19 +281,41 @@ async fn fetch_usage(token: &str) -> Result<UsageResponse, String> {
         .header("anthropic-beta", "oauth-2025-04-20")
         .send()
         .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+        .map_err(|e| (format!("Request failed: {}", e), false))?;
 
-    if !response.status().is_success() {
-        return Err(format!("API returned status: {}", response.status()));
+    let status = response.status();
+    if !status.is_success() {
+        let is_auth_error = status.as_u16() == 401;
+        return Err((format!("API returned status: {}", status), is_auth_error));
     }
 
     response
         .json::<UsageResponse>()
         .await
-        .map_err(|e| format!("Failed to parse response: {}", e))
+        .map_err(|e| (format!("Failed to parse response: {}", e), false))
 }
 
-async fn fetch_profile(token: &str) -> Result<AccountInfo, String> {
+async fn fetch_usage(token: &str) -> Result<UsageResponse, String> {
+    match fetch_usage_internal(token).await {
+        Ok(usage) => Ok(usage),
+        Err((err, is_auth_error)) => {
+            if is_auth_error {
+                // Try to refresh the token
+                if let Ok(refresh_token) = get_refresh_token() {
+                    if let Ok(new_token) = refresh_oauth_token(&refresh_token).await {
+                        // Retry with new token
+                        return fetch_usage_internal(&new_token.access_token)
+                            .await
+                            .map_err(|(e, _)| e);
+                    }
+                }
+            }
+            Err(err)
+        }
+    }
+}
+
+async fn fetch_profile_internal(token: &str) -> Result<AccountInfo, (String, bool)> {
     let client = reqwest::Client::new();
     let response = client
         .get("https://api.anthropic.com/api/oauth/profile")
@@ -171,16 +323,18 @@ async fn fetch_profile(token: &str) -> Result<AccountInfo, String> {
         .header("anthropic-beta", "oauth-2025-04-20")
         .send()
         .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+        .map_err(|e| (format!("Request failed: {}", e), false))?;
 
-    if !response.status().is_success() {
-        return Err(format!("API returned status: {}", response.status()));
+    let status = response.status();
+    if !status.is_success() {
+        let is_auth_error = status.as_u16() == 401;
+        return Err((format!("API returned status: {}", status), is_auth_error));
     }
 
     let profile: ProfileResponse = response
         .json()
         .await
-        .map_err(|e| format!("Failed to parse profile: {}", e))?;
+        .map_err(|e| (format!("Failed to parse profile: {}", e), false))?;
 
     Ok(AccountInfo {
         email: Some(profile.account.email),
@@ -188,6 +342,26 @@ async fn fetch_profile(token: &str) -> Result<AccountInfo, String> {
         full_name: profile.account.full_name,
         subscription: None, // Set by caller from credentials
     })
+}
+
+async fn fetch_profile(token: &str) -> Result<AccountInfo, String> {
+    match fetch_profile_internal(token).await {
+        Ok(profile) => Ok(profile),
+        Err((err, is_auth_error)) => {
+            if is_auth_error {
+                // Try to refresh the token
+                if let Ok(refresh_token) = get_refresh_token() {
+                    if let Ok(new_token) = refresh_oauth_token(&refresh_token).await {
+                        // Retry with new token
+                        return fetch_profile_internal(&new_token.access_token)
+                            .await
+                            .map_err(|(e, _)| e);
+                    }
+                }
+            }
+            Err(err)
+        }
+    }
 }
 
 fn auto_select_chrome_profile(email: &str) -> Option<String> {
